@@ -167,6 +167,7 @@ type Subscriber struct {
 	closing chan struct{}
 
 	outputsWg            sync.WaitGroup
+	doneClosingWg        sync.WaitGroup
 	processingMessagesWg sync.WaitGroup
 	js                   nats.JetStreamContext
 }
@@ -221,6 +222,8 @@ func (s *Subscriber) Subscribe(ctx context.Context, topic string) (<-chan *messa
 
 	for i := 0; i < s.config.SubscribersCount; i++ {
 		s.outputsWg.Add(1)
+		s.doneClosingWg.Add(1)
+
 		subscriberLogFields := watermill.LogFields{
 			"subscriber_num": i,
 			"topic":          topic,
@@ -261,6 +264,7 @@ func (s *Subscriber) Subscribe(ctx context.Context, topic string) (<-chan *messa
 	go func() {
 		s.outputsWg.Wait()
 		close(output)
+		s.doneClosingWg.Done()
 	}()
 
 	return output, nil
@@ -400,11 +404,14 @@ func (s *Subscriber) Close() error {
 		return errors.Wrap(err, "cannot close conn")
 	}
 
-	//TODO: this is weird but need to hesitate long enough for any outstanding output channels to finish closing
-	select {
-	case <-time.After(100 * time.Microsecond):
-		return nil
+	// this should follow nearly immediately but need to ensure that any output channels are closed before return
+	// TODO: investigate making this timeout configurable
+	if internalSync.WaitGroupTimeout(&s.doneClosingWg, time.Millisecond) {
+
+		s.logger.Error("done closing wait group did not finish", nil, nil)
 	}
+
+	return nil
 }
 
 func (s *Subscriber) isClosed() bool {
