@@ -3,7 +3,6 @@ package jetstream
 import (
 	"context"
 	"fmt"
-	internalSync "github.com/ThreeDotsLabs/watermill/pubsub/sync"
 	"sync"
 	"time"
 
@@ -383,6 +382,8 @@ func (s *Subscriber) processMessage(
 }
 
 func (s *Subscriber) Close() error {
+	timeout := time.NewTicker(s.config.CloseTimeout)
+
 	s.subsLock.Lock()
 	defer s.subsLock.Unlock()
 
@@ -396,7 +397,7 @@ func (s *Subscriber) Close() error {
 
 	close(s.closing)
 
-	if internalSync.WaitGroupTimeout(&s.outputsWg, s.config.CloseTimeout) {
+	if waitGroupTimeout(&s.outputsWg, timeout) {
 		return errors.New("output wait group did not finish")
 	}
 
@@ -405,9 +406,7 @@ func (s *Subscriber) Close() error {
 	}
 
 	// this should follow nearly immediately but need to ensure that any output channels are closed before return
-	// TODO: investigate making this timeout configurable
-	if internalSync.WaitGroupTimeout(&s.doneClosingWg, time.Millisecond) {
-
+	if waitGroupTimeout(&s.doneClosingWg, timeout) {
 		s.logger.Error("done closing wait group did not finish", nil, nil)
 	}
 
